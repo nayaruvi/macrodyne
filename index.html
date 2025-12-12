@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Balloon Measurement Extractor</title>
+
+<style>
+    body {
+        font-family: Arial, sans-serif;
+        background: #f4f4f4;
+        padding: 20px;
+    }
+
+    .container {
+        max-width: 850px;
+        margin: auto;
+        background: white;
+        padding: 20px;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+
+    .drop-area {
+        border: 2px dashed #888;
+        padding: 30px;
+        text-align: center;
+        border-radius: 8px;
+        cursor: pointer;
+        background: #fafafa;
+    }
+
+    .numbers-box {
+        max-height: 300px;
+        overflow-y: auto;
+        margin-top: 15px;
+        border: 1px solid #ddd;
+        padding: 10px;
+        border-radius: 6px;
+        background: #fff;
+    }
+
+    .num-row {
+        display: flex;
+        margin-bottom: 8px;
+        gap: 8px;
+    }
+
+    input.num-input {
+        flex: 1;
+        padding: 6px;
+        border: 1px solid #aaa;
+        border-radius: 4px;
+    }
+
+    button {
+        padding: 8px 14px;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+    }
+
+    .btn-primary { background: #007bff; color: white; }
+    .btn-green { background: #28a745; color: white; }
+    .btn-red { background: #dc3545; color: white; }
+    .btn-gray { background: #6c757d; color: white; }
+
+</style>
+</head>
+<body>
+
+<div class="container">
+    <h2>Balloon Measurement Extractor (Frontend)</h2>
+
+    <!-- Drag and Drop -->
+    <div id="dropArea" class="drop-area">
+        Drag & Drop PDF here or Click to Select
+        <br><br>
+        <input id="fileInput" type="file" accept="application/pdf" style="display:none;">
+        <p id="fileName">No file selected</p>
+    </div>
+
+    <br>
+
+    <!-- Action Buttons -->
+    <button type="button" class="btn-primary" onclick="uploadFile()">Upload & Extract</button>
+    <button type="button" class="btn-green" onclick="downloadExcel()">Download Excel</button>
+    <button type="button" class="btn-gray" onclick="undo()">Undo</button>
+
+    <p id="status" style="margin-top: 10px; color: #333;"></p>
+
+    <!-- Results -->
+    <h3>Preview & Edit Measurements</h3>
+    <div id="numbersBox" class="numbers-box"></div>
+</div>
+
+<script>
+// GLOBAL STATE
+let selectedFile = null;
+let numbers = [];
+let historyStack = [];
+
+const dropArea = document.getElementById("dropArea");
+const fileInput = document.getElementById("fileInput");
+const statusEl = document.getElementById("status");
+const numbersBox = document.getElementById("numbersBox");
+
+// =============================
+// DRAG & DROP + CLICK HANDLING
+// =============================
+dropArea.onclick = () => fileInput.click();
+dropArea.addEventListener("dragover", e => e.preventDefault());
+dropArea.addEventListener("drop", e => {
+    e.preventDefault();
+    selectedFile = e.dataTransfer.files[0];
+    document.getElementById("fileName").innerText = selectedFile.name;
+});
+
+fileInput.onchange = e => {
+    selectedFile = e.target.files[0];
+    document.getElementById("fileName").innerText = selectedFile.name;
+};
+
+// =============================
+// UPLOAD TO BACKEND
+// =============================
+async function uploadFile() {
+    if (!selectedFile) {
+        statusEl.innerText = "Please select a PDF!";
+        return;
+    }
+
+    statusEl.innerText = "Uploading & extracting...";
+
+    const formData = new FormData();
+    formData.append("file", selectedFile);
+
+    try {
+        const res = await fetch("http://127.0.0.1:5000/upload", {  // <-- YOUR ocr.py endpoint
+            method: "POST",
+            body: formData
+        });
+
+        const data = await res.json();
+
+        if (!data.numbers) throw new Error("Invalid response");
+
+        // Save history
+        pushHistory();
+
+        numbers = data.numbers;
+        statusEl.innerText = "Extraction complete!";
+        renderNumbers();
+
+    } catch (err) {
+        statusEl.innerText = "Error: " + err.message;
+    }
+}
+
+// =============================
+// RENDER EDITABLE MEASUREMENTS
+// =============================
+function renderNumbers() {
+    numbersBox.innerHTML = "";
+
+    numbers.forEach((num, index) => {
+        const row = document.createElement("div");
+        row.className = "num-row";
+
+        const input = document.createElement("input");
+        input.className = "num-input";
+        input.value = num;
+        input.oninput = e => editNumber(index, e.target.value);
+
+        const delBtn = document.createElement("button");
+        delBtn.className = "btn-red";
+        delBtn.innerText = "Remove";
+        delBtn.onclick = () => removeNumber(index);
+
+        row.appendChild(input);
+        row.appendChild(delBtn);
+
+        numbersBox.appendChild(row);
+    });
+}
+
+function editNumber(i, newValue) {
+    pushHistory();
+    numbers[i] = newValue;
+}
+
+function removeNumber(i) {
+    pushHistory();
+    numbers.splice(i, 1);
+    renderNumbers();
+}
+
+// =============================
+// UNDO SYSTEM
+// =============================
+function pushHistory() {
+    historyStack.push(JSON.stringify(numbers));
+    if (historyStack.length > 50) historyStack.shift();
+}
+
+function undo() {
+    if (historyStack.length === 0) return;
+    numbers = JSON.parse(historyStack.pop());
+    renderNumbers();
+}
+
+// =============================
+// DOWNLOAD EXCEL (SheetJS)
+// =============================
+async function downloadExcel() {
+    // load library
+    if (!window.XLSX) {
+        await loadScript("https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js");
+    }
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(
+        [["Index", "Value"], ...numbers.map((n, i) => [i + 1, n])]
+    );
+    XLSX.utils.book_append_sheet(wb, ws, "Measurements");
+
+    XLSX.writeFile(wb, "measurements.xlsx");
+}
+
+function loadScript(src) {
+    return new Promise(resolve => {
+        const s = document.createElement("script");
+        s.src = src;
+        s.onload = resolve;
+        document.body.appendChild(s);
+    });
+}
+
+</script>
+
+</body>
+</html>
