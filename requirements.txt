@@ -1,7 +1,0 @@
-flask
-flask-cors
-pytesseract
-pymupdf
-Pillow
-gunicorn
-gevent
